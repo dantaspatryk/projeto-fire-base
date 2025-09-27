@@ -1,3 +1,4 @@
+import { supabase } from './services/supabaseClient'; // Importe o cliente Supabase
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Header from './components/Header';
 import { default as SignalDisplay } from './components/SignalDisplay';
@@ -2066,12 +2067,13 @@ const App: React.FC = () => {
         return () => clearInterval(interval);
     }, [payoutSettings]);
 
-    const handleLogin = (email: string, password: string, name?: string) => {
+    const handleLogin = async (email: string, password: string, name?: string) => {
         setLoginError(null);
         setIsLoggingIn(true);
-        setTimeout(() => { // Simulate network
+    
+        try {
             const foundUser = allUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
-
+    
             if (foundUser) { // Login attempt
                 if (name) { // User tried to register with an existing email
                     setLoginError("Este email já está cadastrado. Tente fazer login.");
@@ -2079,7 +2081,15 @@ const App: React.FC = () => {
                     return;
                 }
                 if (foundUser.password === password) {
+                    // Tenta fazer login com o Supabase
+                    const { error } = await supabase.auth.signInWithPassword({ email, password });
+                    if (error) {
+                        setLoginError(`Erro ao fazer login: ${error.message}`);
+                        setIsLoggingIn(false);
+                        return;
+                    }
                     setUser(foundUser);
+    
                 } else {
                     setLoginError("Senha incorreta.");
                 }
@@ -2089,6 +2099,24 @@ const App: React.FC = () => {
                     setIsLoggingIn(false);
                     return;
                 }
+    
+                // Tenta cadastrar o usuário no Supabase
+                const { data, error } = await supabase.auth.signUp({
+                    email,
+                    password,
+                    options: {
+                        data: {
+                            name: name,
+                        }
+                    }
+                });
+    
+                if (error) {
+                    setLoginError(`Erro ao cadastrar usuário: ${error.message}`);
+                    setIsLoggingIn(false);
+                    return;
+                }
+    
                 const newUser: User = {
                     name: name,
                     email: email.toLowerCase(),
@@ -2096,15 +2124,38 @@ const App: React.FC = () => {
                     role: 'user',
                     subscription: { status: 'inactive', expiryDate: null },
                     favoriteGames: [],
-                    notificationSettings: { enabled: false, newSignal: false, signalExpiration: false }
+                    notificationSettings: { enabled: false, newSignal: false, signalExpiration: false },
+                    casinoPlatformName: '',
+                    casinoPlatformLink: '',
                 };
+    
+                // Insere os dados do usuário na tabela 'users'
+                 const { error: insertError } = await supabase
+                    .from('users')
+                    .insert([{
+                        id: data.user?.id, // Use o ID do usuário retornado pelo Supabase
+                        email: newUser.email,
+                        name: newUser.name,
+                        password: newUser.password, // TODO: Hash the password before storing it
+                    }]);
+    
+                if (insertError) {
+                    setLoginError(`Erro ao inserir dados do usuário no Supabase: ${insertError.message}`);
+                    setIsLoggingIn(false);
+                    return;
+                }
+    
                 setAllUsers(prev => [...prev, newUser]);
                 setUser(newUser);
                 addActivityLog('user', `Novo usuário '${newUser.name}' se cadastrou.`);
             }
             setIsLoggingIn(false);
-        }, 500);
+        } catch (error: any) {
+            setLoginError(`Ocorreu um erro inesperado: ${error.message}`);
+            setIsLoggingIn(false);
+        }
     };
+    
 
     const handleLogout = () => {
         setUser(null);
